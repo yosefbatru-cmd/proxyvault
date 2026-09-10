@@ -1,0 +1,71 @@
+package com.spiritdev.proxyvault.ui
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.spiritdev.proxyvault.model.ProxyItem
+import com.spiritdev.proxyvault.network.ProxyFetcher
+import com.spiritdev.proxyvault.network.ProxyValidator
+import com.spiritdev.proxyvault.network.SourceCatalog
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class MainViewModel : ViewModel() {
+
+    private val fetcher = ProxyFetcher()
+    private val validator = ProxyValidator()
+
+    private val _workingProxies = MutableStateFlow<List<ProxyItem>>(emptyList())
+    val workingProxies: StateFlow<List<ProxyItem>> = _workingProxies.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _statusMessage = MutableStateFlow("Ready")
+    val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
+
+    var lastRefreshLabel: String = "Never"
+        private set
+
+    fun refresh() {
+        if (_isLoading.value) return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _statusMessage.value = "Fetching from ${SourceCatalog.DEFAULT.size} sources…"
+            try {
+                val raw = fetcher.fetchAll(SourceCatalog.DEFAULT)
+                _statusMessage.value = "Fetched ${raw.size} candidates. Validating…"
+                val toTest = raw.take(800)
+                val alive = validator.validateBatch(toTest, concurrencyHint = 32)
+                _workingProxies.value = alive
+                lastRefreshLabel = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                _statusMessage.value = "Done. ${alive.size} live proxies."
+            } catch (e: Exception) {
+                _statusMessage.value = "Error: ${e.message ?: "unknown"}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun testSingle(proxy: ProxyItem) {
+        viewModelScope.launch {
+            _statusMessage.value = "Testing ${proxy.address}…"
+            val result = validator.validateBatch(listOf(proxy), concurrencyHint = 1)
+            if (result.isNotEmpty() && result[0].isAlive) {
+                _statusMessage.value = "${proxy.address} OK — ${result[0].speedMs}ms"
+                val current = _workingProxies.value.toMutableList()
+                if (current.none { it.address == proxy.address }) {
+                    current.add(0, result[0])
+                    _workingProxies.value = current
+                }
+            } else {
+                _statusMessage.value = "${proxy.address} dead"
+            }
+        }
+    }
+}
