@@ -4,12 +4,15 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.spiritdev.proxyvault.R
 import com.spiritdev.proxyvault.databinding.ActivityMainBinding
 import com.spiritdev.proxyvault.model.ProxyItem
 import kotlinx.coroutines.flow.collectLatest
@@ -25,6 +28,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        setSupportActionBar(binding.toolbar)
 
         adapter = ProxyAdapter(
             onCopy = { proxy -> copyToClipboard(proxy) },
@@ -39,18 +43,50 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnExport.setOnClickListener {
-            val list = viewModel.workingProxies.value
-            if (list.isEmpty()) {
-                toast("No working proxies to export")
+            val (ok, payload) = viewModel.buildExportText()
+            if (!ok && payload.startsWith("No working")) {
+                toast(payload)
                 return@setOnClickListener
             }
-            val text = list.joinToString("\n") { it.address }
-            copyToClipboardRaw(text)
-            toast("Exported ${list.size} proxies to clipboard")
+            if (!ok && payload.startsWith("Free limit")) {
+                // still copy the free slice
+                val list = viewModel.workingProxies.value.take(50)
+                copyToClipboardRaw(list.joinToString("\n") { it.address })
+                toast(payload)
+                return@setOnClickListener
+            }
+            copyToClipboardRaw(payload)
+            toast("Exported ${viewModel.workingProxies.value.size} proxies")
+        }
+
+        binding.btnRedeem.setOnClickListener {
+            openRedeem()
         }
 
         observeState()
         viewModel.refresh()
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_redeem -> {
+                openRedeem()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    private fun openRedeem() {
+        RedeemDialog {
+            viewModel.refreshTierLabel()
+            toast("Tier updated")
+        }.show(supportFragmentManager, "redeem")
     }
 
     private fun observeState() {
@@ -58,7 +94,7 @@ class MainActivity : AppCompatActivity() {
             viewModel.workingProxies.collectLatest { list ->
                 adapter.submit(list)
                 binding.tvCount.text = "${list.size} working proxies"
-                binding.tvLastRefresh.text = viewModel.lastRefreshLabel
+                binding.tvLastRefresh.text = "Last: ${viewModel.lastRefreshLabel}"
             }
         }
         lifecycleScope.launch {
@@ -70,6 +106,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             viewModel.statusMessage.collectLatest { msg ->
                 if (msg.isNotBlank()) binding.tvStatus.text = msg
+            }
+        }
+        lifecycleScope.launch {
+            viewModel.tierLabel.collectLatest { tier ->
+                binding.tvTier.text = tier
             }
         }
     }

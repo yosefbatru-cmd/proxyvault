@@ -1,7 +1,10 @@
 package com.spiritdev.proxyvault.ui
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.spiritdev.proxyvault.data.LicenseManager
+import com.spiritdev.proxyvault.data.Tier
 import com.spiritdev.proxyvault.model.ProxyItem
 import com.spiritdev.proxyvault.network.ProxyFetcher
 import com.spiritdev.proxyvault.network.ProxyValidator
@@ -14,10 +17,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainViewModel : ViewModel() {
+class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val fetcher = ProxyFetcher()
     private val validator = ProxyValidator()
+    private val ctx get() = getApplication<Application>()
 
     private val _workingProxies = MutableStateFlow<List<ProxyItem>>(emptyList())
     val workingProxies: StateFlow<List<ProxyItem>> = _workingProxies.asStateFlow()
@@ -28,22 +32,40 @@ class MainViewModel : ViewModel() {
     private val _statusMessage = MutableStateFlow("Ready")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    private val _tierLabel = MutableStateFlow("FREE")
+    val tierLabel: StateFlow<String> = _tierLabel.asStateFlow()
+
     var lastRefreshLabel: String = "Never"
         private set
+
+    init {
+        refreshTierLabel()
+    }
+
+    fun refreshTierLabel() {
+        val t = LicenseManager.currentTier(ctx)
+        _tierLabel.value = when (t) {
+            Tier.FREE -> "FREE"
+            Tier.PREMIUM -> "PREMIUM"
+            Tier.PRO -> "PRO"
+            Tier.LIFETIME -> "LIFETIME"
+        }
+    }
 
     fun refresh() {
         if (_isLoading.value) return
         viewModelScope.launch {
             _isLoading.value = true
+            val cap = LicenseManager.validationCap(ctx)
             _statusMessage.value = "Fetching from ${SourceCatalog.DEFAULT.size} sources…"
             try {
                 val raw = fetcher.fetchAll(SourceCatalog.DEFAULT)
-                _statusMessage.value = "Fetched ${raw.size} candidates. Validating…"
-                val toTest = raw.take(800)
+                _statusMessage.value = "Fetched ${raw.size} candidates. Validating (cap $cap)…"
+                val toTest = raw.take(cap)
                 val alive = validator.validateBatch(toTest, concurrencyHint = 32)
                 _workingProxies.value = alive
                 lastRefreshLabel = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-                _statusMessage.value = "Done. ${alive.size} live proxies."
+                _statusMessage.value = "Done. ${alive.size} live proxies. [${_tierLabel.value}]"
             } catch (e: Exception) {
                 _statusMessage.value = "Error: ${e.message ?: "unknown"}"
             } finally {
@@ -66,6 +88,20 @@ class MainViewModel : ViewModel() {
             } else {
                 _statusMessage.value = "${proxy.address} dead"
             }
+        }
+    }
+
+    /** Returns text to export, or null if free tier over limit */
+    fun buildExportText(): Pair<Boolean, String> {
+        val list = _workingProxies.value
+        if (list.isEmpty()) return false to "No working proxies"
+        val limit = LicenseManager.exportLimit(ctx)
+        val slice = list.take(limit)
+        val text = slice.joinToString("\n") { it.address }
+        return if (list.size > limit) {
+            false to "Free limit: exported ${slice.size}/${list.size}. Upgrade for unlimited."
+        } else {
+            true to text
         }
     }
 }
