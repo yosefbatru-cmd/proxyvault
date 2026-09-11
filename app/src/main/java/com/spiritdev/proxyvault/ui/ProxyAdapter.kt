@@ -1,8 +1,12 @@
 package com.spiritdev.proxyvault.ui
 
+import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
+import com.spiritdev.proxyvault.R
 import com.spiritdev.proxyvault.databinding.ItemProxyBinding
 import com.spiritdev.proxyvault.model.ProxyItem
 
@@ -14,9 +18,17 @@ class ProxyAdapter(
     private val items = mutableListOf<ProxyItem>()
 
     fun submit(list: List<ProxyItem>) {
+        val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+            override fun getOldListSize() = items.size
+            override fun getNewListSize() = list.size
+            override fun areItemsTheSame(o: Int, n: Int) =
+                items[o].address == list[n].address
+            override fun areContentsTheSame(o: Int, n: Int) =
+                items[o] == list[n]
+        })
         items.clear()
         items.addAll(list)
-        notifyDataSetChanged()
+        diff.dispatchUpdatesTo(this)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -34,8 +46,19 @@ class ProxyAdapter(
         fun bind(item: ProxyItem) {
             binding.tvAddress.text = item.address
             binding.tvMeta.text = "${item.protocol.uppercase()} · ${item.displaySpeed} · ${item.source}"
-            binding.tvCountry.text = item.countryCode
+            binding.tvCountry.text = item.countryCode.ifBlank { "XX" }
+
+            val speedColor = when {
+                item.speedMs < 0 -> ContextCompat.getColor(binding.root.context, R.color.text_secondary)
+                item.speedMs < 300 -> ContextCompat.getColor(binding.root.context, R.color.speed_fast)
+                item.speedMs < 800 -> ContextCompat.getColor(binding.root.context, R.color.speed_mid)
+                else -> ContextCompat.getColor(binding.root.context, R.color.speed_slow)
+            }
+            binding.speedBar.setBackgroundColor(speedColor)
+
             binding.root.setOnClickListener { onCopy(item) }
+            binding.btnCopy.setOnClickListener { onCopy(item) }
+            binding.btnTest.setOnClickListener { onTest(item) }
             binding.root.setOnLongClickListener {
                 onTest(item)
                 true
